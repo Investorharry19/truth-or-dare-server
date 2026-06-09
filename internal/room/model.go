@@ -36,7 +36,9 @@ type Room struct {
 	LastTargetResponse string     `json:"lastTargetResponse"`
 	CurrentChoice      string     `json:"currentChoice"`
 	CurrentChallenge   *Challenge `json:"currentChallenge"`
-	IsPaused           bool       `json:"isPaused"`
+
+	RoundHistory []RoundHistoryItem `json:"roundHistory"`
+	IsPaused     bool               `json:"isPaused"`
 
 	CurrentCommanderID string
 	CurrentTargetID    string
@@ -62,6 +64,17 @@ type Challenge struct {
 	Text        string `json:"text"`
 	TargetID    string `json:"targetId"`
 	CommanderID string `json:"commanderId"`
+}
+
+type RoundHistoryItem struct {
+	ID         string `json:"id"`
+	Type       string `json:"type"`
+	Text       string `json:"text"`
+	ActorID    string `json:"actorId"`
+	ActorName  string `json:"actorName"`
+	TargetID   string `json:"targetId,omitempty"`
+	TargetName string `json:"targetName,omitempty"`
+	Timestamp  int64  `json:"timestamp"`
 }
 
 const (

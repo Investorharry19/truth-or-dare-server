@@ -339,6 +339,17 @@ func handleMessages(client *Client, conn *websocket.Conn) {
 
 			room.mu.Unlock()
 
+			addRoundHistory(room, RoundHistoryItem{
+				ID:         fmt.Sprintf("spin_%d", time.Now().UnixNano()),
+				Type:       "bottle_spun",
+				Text:       fmt.Sprintf("%s spun the bottle and it landed on %s.", client.Username, getUsername(room, selectedID)),
+				ActorID:    client.UserID,
+				ActorName:  client.Username,
+				TargetID:   selectedID,
+				TargetName: getUsername(room, selectedID),
+				Timestamp:  time.Now().UnixMilli(),
+			})
+
 			Broadcast(room, "bottle_spun", gin.H{
 				"spinner_id":  client.UserID,
 				"selected_id": selectedID,
@@ -349,7 +360,7 @@ func handleMessages(client *Client, conn *websocket.Conn) {
 		// MAKE CHOICE
 		// =====================================================
 
-		case "make_choice":
+		case "make_choice", "truth_or_dare_choice":
 			room := currentRoom(client)
 			if room == nil {
 				sendError(client, "Room not found")
@@ -366,49 +377,78 @@ func handleMessages(client *Client, conn *websocket.Conn) {
 				"target_id": client.UserID,
 			})
 
-		// =====================================================
-		// ISSUE CHALLENGE
-		// =====================================================
+			addRoundHistory(room, RoundHistoryItem{
+				ID:         fmt.Sprintf("choice_%d", time.Now().UnixNano()),
+				Type:       "choice_made",
+				Text:       fmt.Sprintf("%s chose %s.", client.Username, choice),
+				ActorID:    client.UserID,
+				ActorName:  client.Username,
+				TargetID:   room.LastSelectedID,
+				TargetName: client.Username,
+				Timestamp:  time.Now().UnixMilli(),
+			})
 
-		case "issue_challenge":
+			sendRoomUpdate(room)
+
+			// =====================================================
+			// ISSUE CHALLENGE
+			// =====================================================
+
+		case "issue_challenge", "prompt_broadcast":
 			room := currentRoom(client)
 			if room == nil {
 				sendError(client, "Room not found")
 				continue
 			}
-			text, _ := payload["text"].(string)
+			text, _ := payload["prompt_text"].(string)
 			choice, _ := payload["choice"].(string)
-			targetID, _ := payload["target_id"].(string)
+			targetID := room.CurrentPlayerID
 
 			room.mu.Lock()
-			room.CurrentPlayerID = targetID
-			room.RoundPhase = PhaseTargetReply
+			room.CurrentChoice = choice
 			room.CurrentChallenge = &Challenge{
 				Type:        choice,
 				Text:        text,
 				TargetID:    targetID,
 				CommanderID: client.UserID,
 			}
+			room.RoundPhase = PhaseTargetReply
 			room.mu.Unlock()
 
-			Broadcast(room, "challenge_issued", gin.H{
-				"text":         text,
-				"choice":       choice,
-				"target_id":    targetID,
+			Broadcast(room, "prompt_broadcast", gin.H{
 				"commander_id": client.UserID,
+				"selected_id":  targetID,
+				"prompt_text":  text,
+				"choice":       choice,
 			})
 
-		// =====================================================
-		// TARGET REPLY
-		// =====================================================
+			addRoundHistory(room, RoundHistoryItem{
+				ID:         fmt.Sprintf("prompt_%d", time.Now().UnixNano()),
+				Type:       "prompt_broadcast",
+				Text:       fmt.Sprintf("%s asked %s: %s", client.Username, getUsername(room, targetID), text),
+				ActorID:    client.UserID,
+				ActorName:  client.Username,
+				TargetID:   targetID,
+				TargetName: getUsername(room, targetID),
+				Timestamp:  time.Now().UnixMilli(),
+			})
 
-		case "target_reply":
+			sendRoomUpdate(room)
+
+			// =====================================================
+			// TARGET REPLY
+			// =====================================================
+
+		case "target_reply", "player_response":
 			room := currentRoom(client)
 			if room == nil {
 				sendError(client, "Room not found")
 				continue
 			}
-			reply, _ := payload["text"].(string)
+			reply, _ := payload["response_text"].(string)
+			if reply == "" {
+				reply, _ = payload["text"].(string)
+			}
 
 			room.mu.Lock()
 			room.CurrentCommanderID = client.UserID
@@ -417,9 +457,27 @@ func handleMessages(client *Client, conn *websocket.Conn) {
 			room.LastTargetResponse = reply
 			room.mu.Unlock()
 
-			Broadcast(room, "target_replied", gin.H{
+			Broadcast(room, "player_response", gin.H{
 				"text":      reply,
 				"target_id": client.UserID,
+			})
+
+			addRoundHistory(room, RoundHistoryItem{
+				ID:         fmt.Sprintf("response_%d", time.Now().UnixNano()),
+				Type:       "player_response",
+				Text:       fmt.Sprintf("%s replied: %s", client.Username, reply),
+				ActorID:    client.UserID,
+				ActorName:  client.Username,
+				TargetID:   client.UserID,
+				TargetName: getUsername(room, client.UserID),
+				Timestamp:  time.Now().UnixMilli(),
+			})
+
+			sendRoomUpdate(room)
+
+			Broadcast(room, "next_turn", gin.H{
+				"current_player_id": room.CurrentPlayerID,
+				"commander_id":      room.CommanderID,
 			})
 
 		// =====================================================
@@ -697,6 +755,19 @@ func currentRoom(client *Client) *Room {
 	return GetRoom(client.RoomID)
 }
 
+func getUsername(room *Room, userID string) string {
+	room.mu.RLock()
+	defer room.mu.RUnlock()
+
+	for _, p := range room.Participants {
+		if p.UserID == userID {
+			return p.Username
+		}
+	}
+
+	return "Player"
+}
+
 func sendError(client *Client, msg string) {
 	if client == nil || client.Conn == nil {
 		fmt.Printf("sendError skipped for nil client or connection: %s\n", msg)
@@ -710,6 +781,16 @@ func sendError(client *Client, msg string) {
 		},
 	}); err != nil {
 		fmt.Printf("sendError failed for %s: %v\n", client.UserID, err)
+	}
+}
+
+func addRoundHistory(room *Room, entry RoundHistoryItem) {
+	room.mu.Lock()
+	defer room.mu.Unlock()
+
+	room.RoundHistory = append(room.RoundHistory, entry)
+	if len(room.RoundHistory) > 100 {
+		room.RoundHistory = room.RoundHistory[len(room.RoundHistory)-100:]
 	}
 }
 
@@ -742,6 +823,7 @@ func sendRoomUpdate(room *Room) {
 		"current_challenge": room.CurrentChallenge,
 		"target_response":   room.LastTargetResponse,
 		"is_paused":         room.IsPaused,
+		"round_history":     room.RoundHistory,
 	}
 
 	Broadcast(room, "room_update", payload)
