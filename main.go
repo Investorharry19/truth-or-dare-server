@@ -92,6 +92,13 @@ func main() {
 		points.GET("/transfers", middleware.AuthMiddleware(), payments.GetTransferHistory(db.Pool))
 	}
 
+	r.GET("/", func(ctx *gin.Context) {
+		ctx.JSON(200, gin.H{
+			"message":     "Welcome to the Truth or Dare Game Server!",
+			"last_update": "2026-06-09",
+		})
+	})
+
 	//Print all registered routes BEFORE starting server
 	fmt.Println("\n🔍 Registered Routes:")
 	for _, route := range r.Routes() {
