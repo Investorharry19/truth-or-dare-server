@@ -422,6 +422,14 @@ func handleMessages(client *Client, conn *websocket.Conn) {
 				"choice":       choice,
 			})
 
+			// Also broadcast as challenge_issued for frontend compatibility
+			Broadcast(room, "challenge_issued", gin.H{
+				"commander_id": client.UserID,
+				"target_id":    targetID,
+				"text":         text,
+				"choice":       choice,
+			})
+
 			addRoundHistory(room, RoundHistoryItem{
 				ID:         fmt.Sprintf("prompt_%d", time.Now().UnixNano()),
 				Type:       "prompt_broadcast",
@@ -458,6 +466,12 @@ func handleMessages(client *Client, conn *websocket.Conn) {
 			room.mu.Unlock()
 
 			Broadcast(room, "player_response", gin.H{
+				"text":      reply,
+				"target_id": client.UserID,
+			})
+
+			// Also broadcast as target_replied for frontend compatibility
+			Broadcast(room, "target_replied", gin.H{
 				"text":      reply,
 				"target_id": client.UserID,
 			})

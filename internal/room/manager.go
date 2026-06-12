@@ -86,9 +86,11 @@ func StartInactivityCleanup(timeout time.Duration) {
 			for id, r := range Rooms {
 				r.mu.RLock()
 				inactive := now.Sub(r.LastActivity) > timeout
+				participantCount := len(r.Participants)
 				r.mu.RUnlock()
 
-				if inactive {
+				// Skip inactivity cleanup if 2 or more people are in the room (active call)
+				if inactive && participantCount < 2 {
 					// Dissolve the room
 					Broadcast(r, "room_closed", gin.H{
 						"message": "The room has been closed due to inactivity.",

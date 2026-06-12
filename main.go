@@ -114,6 +114,9 @@ func main() {
 	})
 	r.GET("/ws", room.ServeWs)
 
+	// Initialize LiveKit helper routes (token issuance)
+	room.InitializeLiveKitRoutes(r)
+
 	cronjobs.StartPointsResetCron(db.Pool)
 	room.StartInactivityCleanup(5 * time.Minute)
 	log.Println("Server running on port", port)
