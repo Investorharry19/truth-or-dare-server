@@ -95,7 +95,7 @@ func main() {
 	r.GET("/", func(ctx *gin.Context) {
 		ctx.JSON(200, gin.H{
 			"message":     "Welcome to the Truth or Dare Game Server!",
-			"last_update": "2026-06-09",
+			"last_update": "2026-06-12",
 		})
 	})
 

@@ -81,38 +81,44 @@ func StartInactivityCleanup(timeout time.Duration) {
 		defer ticker.Stop()
 
 		for range ticker.C {
-			roomsMu.Lock()
 			now := time.Now()
+
+			// Collect room pointers that should be closed while holding the map lock briefly
+			var toClose []*Room
+			roomsMu.Lock()
 			for id, r := range Rooms {
 				r.mu.RLock()
 				inactive := now.Sub(r.LastActivity) > timeout
 				participantCount := len(r.Participants)
 				r.mu.RUnlock()
 
-				// Skip inactivity cleanup if 2 or more people are in the room (active call)
 				if inactive && participantCount < 2 {
-					// Dissolve the room
-					Broadcast(r, "room_closed", gin.H{
-						"message": "The room has been closed due to inactivity.",
-					})
-
-					// Clean up Cloudinary resources
-					cleanupRoomResources(r)
-
-					// Close all websocket connections of participants
-					r.mu.Lock()
-					for _, p := range r.Participants {
-						if p.Conn != nil {
-							p.Conn.Close()
-						}
-					}
-					r.mu.Unlock()
-
+					toClose = append(toClose, r)
 					delete(Rooms, id)
-					fmt.Printf("Room %s closed due to inactivity\n", id)
 				}
 			}
 			roomsMu.Unlock()
+
+			// Perform network I/O and cleanup without holding roomsMu
+			for _, r := range toClose {
+				Broadcast(r, "room_closed", gin.H{
+					"message": "The room has been closed due to inactivity.",
+				})
+
+				// Clean up Cloudinary resources
+				cleanupRoomResources(r)
+
+				// Close all websocket connections of participants
+				r.mu.Lock()
+				for _, p := range r.Participants {
+					if p.Conn != nil {
+						p.Conn.Close()
+					}
+				}
+				r.mu.Unlock()
+
+				fmt.Printf("Room %s closed due to inactivity\n", r.ID)
+			}
 		}
 	}()
 }
