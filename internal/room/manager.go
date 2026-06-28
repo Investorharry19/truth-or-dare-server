@@ -16,7 +16,7 @@ func GetRoom(id string) *Room {
 }
 
 // CreateRoom creates a new room and adds it to the map
-func CreateRoom(id, name, hostID, hostUsername string, maxPlayers int, private bool) *Room {
+func CreateRoom(id, name, hostID, hostUsername string, maxPlayers int, private bool, password string) *Room {
 	room := &Room{
 		ID:           id,
 		Name:         name,
@@ -24,6 +24,7 @@ func CreateRoom(id, name, hostID, hostUsername string, maxPlayers int, private b
 		MaxPlayers:   maxPlayers,
 		Private:      private,
 		Participants: make([]*Client, 0),
+		Password:     password,
 		TimeLimit:    30,
 		LastActivity: time.Now(),
 	}

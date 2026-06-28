@@ -132,9 +132,6 @@ func handleMessages(client *Client, conn *websocket.Conn) {
 
 			roomID, ok := payload["room_id"].(string)
 
-			client.RoomID = roomID
-			fmt.Println("client.RoomID set to:", client.RoomID, "for user:", client.Username)
-
 			if !ok || roomID == "" {
 				sendError(client, "Invalid room ID")
 				continue
@@ -147,6 +144,7 @@ func handleMessages(client *Client, conn *websocket.Conn) {
 				continue
 			}
 
+			// If joining a different room, leave current first
 			if client.RoomID != "" && client.RoomID != roomID {
 				leaveRoom(client)
 			}
@@ -157,6 +155,21 @@ func handleMessages(client *Client, conn *websocket.Conn) {
 				room.mu.Unlock()
 				sendError(client, "Room is full")
 				continue
+			}
+
+			// Private room passcode check
+			if room.Private && client.UserID != room.HostID {
+				code, okCode := payload["passcode"].(string)
+				if !okCode || code == "" {
+					room.mu.Unlock()
+					sendError(client, "Passcode required for private room")
+					continue
+				}
+				if code != room.Password {
+					room.mu.Unlock()
+					sendError(client, "Invalid passcode")
+					continue
+				}
 			}
 
 			// ✅ Check if already in the room
@@ -207,6 +220,47 @@ func handleMessages(client *Client, conn *websocket.Conn) {
 		// =====================================================
 		// LEAVE ROOM
 		// =====================================================
+
+		case "generate_passcode":
+			fmt.Println("Received generate_passcode from client:", client.UserID)
+			// Host can generate a one‑time passcode for a private room
+			room := currentRoom(client)
+			if room == nil {
+				fmt.Println("generate_passcode failed: Room not found")
+				sendError(client, "Room not found")
+				continue
+			}
+			if client.UserID != room.HostID {
+				fmt.Println("generate_passcode failed: Only the host can generate a passcode")
+				sendError(client, "Only the host can generate a passcode")
+				continue
+			}
+			if !room.Private {
+				fmt.Println("generate_passcode failed: Passcode only needed for private rooms")
+				sendError(client, "Passcode only needed for private rooms")
+				continue
+			}
+			
+			room.mu.Lock()
+			if room.Password == "" {
+				const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+				b := make([]byte, 6)
+				for i := range b {
+					b[i] = charset[rand.Intn(len(charset))]
+				}
+				room.Password = string(b)
+				fmt.Println("generate_passcode: generated new passcode:", room.Password)
+			}
+			passcode := room.Password
+			room.mu.Unlock()
+
+			fmt.Println("generate_passcode success. Sending passcode:", passcode)
+			// Return the room's persistent password
+			client.Conn.WriteJSON(gin.H{
+				"type": "passcode_generated",
+				"payload": gin.H{"passcode": passcode},
+			})
+			continue
 
 		case "leave_room":
 
@@ -851,6 +905,7 @@ func CreateRoomHandler(c *gin.Context) {
 		Name        string   `json:"name"`
 		MaxPlayers  int      `json:"max_players"`
 		Private     bool     `json:"private"`
+		Password    string   `json:"password"`
 		BannedWords []string `json:"banned_words"`
 		Username    string   `json:"username"`
 	}
@@ -875,6 +930,7 @@ func CreateRoomHandler(c *gin.Context) {
 		body.Username,
 		body.MaxPlayers,
 		body.Private,
+		body.Password,
 	)
 
 	room.BannedWords = body.BannedWords
@@ -926,6 +982,7 @@ func GetRoomHandler(c *gin.Context) {
 		"participants": participants,
 		"maxPlayers":   room.MaxPlayers,
 		"private":      room.Private,
+		"gameStarted":  room.GameStarted,
 
 		"phase":            room.RoundPhase,
 		"commanderId":      room.CommanderID,

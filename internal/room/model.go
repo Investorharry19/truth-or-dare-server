@@ -26,6 +26,7 @@ type Room struct {
 	Private      bool
 	BannedWords  []string `json:"bannedWords"`
 	TimeLimit    int      `json:"timeLimit"`
+	Password     string   `json:"password"`
 
 	// Game state
 	CurrentPlayerID    string // player whose turn it is to pick truth/dare
@@ -42,8 +43,8 @@ type Room struct {
 
 	CurrentCommanderID string
 	CurrentTargetID    string
-	RoundPhase         string
-	PausedPhase        string `json:"pausedPhase"`
+	RoundPhase         RoomPhase
+	PausedPhase        RoomPhase `json:"pausedPhase"`
 
 	// Cloudinary resource tracking
 	UploadedResources []UploadedResource `json:"uploadedResources"`
@@ -77,12 +78,16 @@ type RoundHistoryItem struct {
 	Timestamp  int64  `json:"timestamp"`
 }
 
+type RoomPhase string
+
 const (
-	PhaseSpinning        = "spinning"
-	PhaseChoosing        = "choosing"
-	PhaseCommanderPrompt = "commander_prompt"
-	PhaseTargetReply     = "target_reply"
-	PhaseReveal          = "reveal"
+	PhaseSpinning        RoomPhase = "spinning"
+	PhaseChoosing        RoomPhase = "choosing"
+	PhaseCommanderPrompt RoomPhase = "commander_prompt"
+	PhaseTargetReply     RoomPhase = "target_reply"
+	PhaseReveal          RoomPhase = "reveal"
+	PhasePaused          RoomPhase = "paused"
+	PhaseWaiting         RoomPhase = "waiting"
 )
 
 // Map to store active rooms in memory .
@@ -90,7 +95,3 @@ var (
 	Rooms   = make(map[string]*Room)
 	roomsMu sync.RWMutex
 )
-
-// Phase constants
-const PhasePaused = "paused"
-const PhaseWaiting = "waiting"
