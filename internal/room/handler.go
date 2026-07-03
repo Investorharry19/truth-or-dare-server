@@ -165,7 +165,7 @@ func handleMessages(client *Client, conn *websocket.Conn) {
 					sendError(client, "Passcode required for private room")
 					continue
 				}
-				if code != room.Password {
+				if !room.consumePasscodeLocked(code) {
 					room.mu.Unlock()
 					sendError(client, "Invalid passcode")
 					continue
@@ -242,16 +242,8 @@ func handleMessages(client *Client, conn *websocket.Conn) {
 			}
 			
 			room.mu.Lock()
-			if room.Password == "" {
-				const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-				b := make([]byte, 6)
-				for i := range b {
-					b[i] = charset[rand.Intn(len(charset))]
-				}
-				room.Password = string(b)
-				fmt.Println("generate_passcode: generated new passcode:", room.Password)
-			}
-			passcode := room.Password
+			passcode := room.generatePasscodeLocked()
+			fmt.Println("generate_passcode: generated new passcode:", passcode)
 			room.mu.Unlock()
 
 			fmt.Println("generate_passcode success. Sending passcode:", passcode)
