@@ -346,6 +346,106 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (uuid.UUID, 
 	return id, newRefreshToken, nil
 }
 
+// GoogleLogin verifies a Google ID token, creates a user if necessary,
+// and returns the user ID and a new refresh token.
+func (s *Service) GoogleLogin(ctx context.Context, idToken string) (uuid.UUID, string, error) {
+	// Verify token with Google's tokeninfo endpoint
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://oauth2.googleapis.com/tokeninfo", nil)
+	if err != nil {
+		return uuid.Nil, "", err
+	}
+
+	q := req.URL.Query()
+	q.Add("id_token", idToken)
+	req.URL.RawQuery = q.Encode()
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return uuid.Nil, "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return uuid.Nil, "", errors.New("invalid google token")
+	}
+
+	var payload struct {
+		Email         string `json:"email"`
+		EmailVerified string `json:"email_verified"`
+		Name          string `json:"name"`
+		Sub           string `json:"sub"`
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return uuid.Nil, "", err
+	}
+
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return uuid.Nil, "", err
+	}
+
+	if payload.Email == "" {
+		return uuid.Nil, "", errors.New("google token missing email")
+	}
+
+	// Try to find an existing user by email
+	u, err := s.users.GetByEmail(ctx, payload.Email)
+	if err != nil {
+		if errors.Is(err, user.ErrUserNotFound) {
+			// Create a new user
+			username := strings.Split(payload.Email, "@")[0]
+			// sanitize username a bit
+			username = strings.ToLower(strings.ReplaceAll(username, " ", ""))
+
+			newUser := &user.User{
+				ID:            uuid.New(),
+				Username:      username,
+				FullName:      payload.Name,
+				Email:         payload.Email,
+				PasswordHash:  "",
+				EmailVerified: true,
+				PaidPoints:    0,
+				FreePoints:    30,
+				LastResetAt:   time.Now(),
+			}
+
+			// Ensure username uniqueness: if create fails due to constraint, append suffix
+			if err := s.users.Create(ctx, newUser); err != nil {
+				// try with a random suffix
+				newUser.Username = newUser.Username + "-" + uuid.NewString()[:8]
+				if err := s.users.Create(ctx, newUser); err != nil {
+					return uuid.Nil, "", err
+				}
+			}
+
+			refreshToken, err := jwtpkg.GenerateRefreshToken(newUser.ID)
+			if err != nil {
+				return uuid.Nil, "", err
+			}
+
+			if err := s.users.SetRefreshToken(ctx, newUser.ID, refreshToken); err != nil {
+				return uuid.Nil, "", err
+			}
+
+			return newUser.ID, refreshToken, nil
+		}
+		return uuid.Nil, "", err
+	}
+
+	// Existing user: issue a new refresh token
+	refreshToken, err := jwtpkg.GenerateRefreshToken(u.ID)
+	if err != nil {
+		return uuid.Nil, "", err
+	}
+
+	if err := s.users.SetRefreshToken(ctx, u.ID, refreshToken); err != nil {
+		return uuid.Nil, "", err
+	}
+
+	return u.ID, refreshToken, nil
+}
+
 func (s *Service) Logout(ctx context.Context, userID uuid.UUID) error {
 	return s.users.ClearRefreshToken(ctx, userID)
 }

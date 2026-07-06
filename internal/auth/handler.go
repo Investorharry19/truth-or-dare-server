@@ -55,6 +55,10 @@ type refreshRequest struct {
 	RefreshToken string `json:"refreshToken" binding:"required"`
 }
 
+type googleRequest struct {
+	IDToken string `json:"idToken" binding:"required"`
+}
+
 func (h *Handler) Register(c *gin.Context) {
 	var req registerRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -208,6 +212,31 @@ func (h *Handler) Refresh(c *gin.Context) {
 	userID, refreshToken, err := h.service.Refresh(c.Request.Context(), req.RefreshToken)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid refresh token"})
+		return
+	}
+
+	accessToken, err := jwtpkg.GenerateAccessToken(userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "token error"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"accessToken":  accessToken,
+		"refreshToken": refreshToken,
+	})
+}
+
+func (h *Handler) Google(c *gin.Context) {
+	var req googleRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	userID, refreshToken, err := h.service.GoogleLogin(c.Request.Context(), req.IDToken)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid google token"})
 		return
 	}
 

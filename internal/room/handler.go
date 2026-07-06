@@ -240,7 +240,7 @@ func handleMessages(client *Client, conn *websocket.Conn) {
 				sendError(client, "Passcode only needed for private rooms")
 				continue
 			}
-			
+
 			room.mu.Lock()
 			passcode := room.generatePasscodeLocked()
 			fmt.Println("generate_passcode: generated new passcode:", passcode)
@@ -249,7 +249,7 @@ func handleMessages(client *Client, conn *websocket.Conn) {
 			fmt.Println("generate_passcode success. Sending passcode:", passcode)
 			// Return the room's persistent password
 			client.Conn.WriteJSON(gin.H{
-				"type": "passcode_generated",
+				"type":    "passcode_generated",
 				"payload": gin.H{"passcode": passcode},
 			})
 			continue
