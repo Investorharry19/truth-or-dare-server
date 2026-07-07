@@ -65,6 +65,8 @@ func main() {
 		authRoutes.POST("/logout", middleware.AuthMiddleware(), authHandler.Logout)
 		authRoutes.GET("/me", middleware.AuthMiddleware(), authHandler.MeHandler)
 		authRoutes.GET("/points", middleware.AuthMiddleware(), authHandler.PointsHandler)
+		authRoutes.GET("/streak", middleware.AuthMiddleware(), authHandler.StreakGetHandler)
+		authRoutes.POST("/streak", middleware.AuthMiddleware(), authHandler.StreakRecordHandler)
 	}
 	roomRoutes := r.Group("/room")
 	{

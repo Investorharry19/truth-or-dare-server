@@ -311,3 +311,41 @@ func (h *Handler) PointsHandler(c *gin.Context) {
 		"paid_points": paid,
 	})
 }
+
+func (h *Handler) StreakGetHandler(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not found in context"})
+		return
+	}
+
+	u, err := h.service.users.GetByID(c.Request.Context(), uuid.MustParse(userID.(string)))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not load user"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"currentStreak": u.CurrentStreak,
+		"longestStreak": u.LongestStreak,
+		"lastActiveAt":  u.LastActiveAt,
+	})
+}
+
+func (h *Handler) StreakRecordHandler(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not found in context"})
+		return
+	}
+
+	id := uuid.MustParse(userID.(string))
+
+	current, longest, err := h.service.RecordStreak(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not update streak"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"currentStreak": current, "longestStreak": longest})
+}

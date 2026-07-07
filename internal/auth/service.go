@@ -49,6 +49,16 @@ func NewService(users *user.Repository) *Service {
 	return &Service{users: users, httpClient: httpClient}
 }
 
+// RecordStreak marks activity for a user and returns updated streak counts
+func (s *Service) RecordStreak(ctx context.Context, id uuid.UUID) (int, int, error) {
+	now := time.Now()
+	current, longest, err := s.users.UpdateStreak(ctx, id, now)
+	if err != nil {
+		return 0, 0, err
+	}
+	return current, longest, nil
+}
+
 func (s *Service) sendVerificationEmail(ctx context.Context, email, username, token string) error {
 	apiKey := os.Getenv("RESEND_API_KEY")
 	if apiKey == "" {

@@ -22,7 +22,7 @@ func (r *Repository) Create(ctx context.Context, u *User) error {
 	query := `
 		INSERT INTO users (
 			id, username, full_name, email, password_hash, email_verified,
-			verification_token, verification_expires_at, paid_points, free_points,
+			verification_token, verification_expires_at, paid_points, free_points, current_streak, longest_streak, last_active_at,
 			last_reset_at, password_reset_token, password_reset_expires_at, refresh_token
 		)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
@@ -39,6 +39,9 @@ func (r *Repository) Create(ctx context.Context, u *User) error {
 		u.VerificationExpiresAt,
 		u.PaidPoints,
 		u.FreePoints,
+		u.CurrentStreak,
+		u.LongestStreak,
+		u.LastActiveAt,
 		u.LastResetAt,
 		u.PasswordResetToken,
 		u.PasswordResetExpiresAt,
@@ -52,7 +55,7 @@ func (r *Repository) GetByEmail(ctx context.Context, email string) (*User, error
 	query := `
 		SELECT id, username, full_name, email, password_hash, email_verified,
 		COALESCE(verification_token, ''), COALESCE(verification_expires_at, '0001-01-01'),
-		paid_points, free_points,
+		paid_points, free_points, COALESCE(current_streak,0), COALESCE(longest_streak,0), COALESCE(last_active_at, '0001-01-01'),
 		created_at, last_reset_at, COALESCE(refresh_token, '')
 		FROM users
 		WHERE email = $1
@@ -72,6 +75,9 @@ func (r *Repository) GetByEmail(ctx context.Context, email string) (*User, error
 		&u.VerificationExpiresAt,
 		&u.PaidPoints,
 		&u.FreePoints,
+		&u.CurrentStreak,
+		&u.LongestStreak,
+		&u.LastActiveAt,
 		&u.CreatedAt,
 		&u.LastResetAt,
 		&u.RefreshToken,
@@ -91,7 +97,7 @@ func (r *Repository) GetByID(ctx context.Context, id uuid.UUID) (*User, error) {
 	query := `
 		SELECT id, username, full_name, email, password_hash, email_verified,
 		COALESCE(verification_token, ''), COALESCE(verification_expires_at, '0001-01-01'),
-		paid_points, free_points,
+		paid_points, free_points, COALESCE(current_streak,0), COALESCE(longest_streak,0), COALESCE(last_active_at, '0001-01-01'),
 		created_at, last_reset_at, COALESCE(refresh_token, '')
 		FROM users
 		WHERE id = $1
@@ -111,6 +117,9 @@ func (r *Repository) GetByID(ctx context.Context, id uuid.UUID) (*User, error) {
 		&u.VerificationExpiresAt,
 		&u.PaidPoints,
 		&u.FreePoints,
+		&u.CurrentStreak,
+		&u.LongestStreak,
+		&u.LastActiveAt,
 		&u.CreatedAt,
 		&u.LastResetAt,
 		&u.RefreshToken,
@@ -181,7 +190,7 @@ func (r *Repository) GetByVerificationToken(ctx context.Context, token string) (
 	query := `
 		SELECT id, username, full_name, email, password_hash, email_verified,
 		COALESCE(verification_token, ''), COALESCE(verification_expires_at, '0001-01-01'),
-		paid_points, free_points,
+		paid_points, free_points, COALESCE(current_streak,0), COALESCE(longest_streak,0), COALESCE(last_active_at, '0001-01-01'),
 		created_at, last_reset_at, COALESCE(refresh_token, '')
 		FROM users
 		WHERE verification_token = $1
@@ -201,6 +210,9 @@ func (r *Repository) GetByVerificationToken(ctx context.Context, token string) (
 		&u.VerificationExpiresAt,
 		&u.PaidPoints,
 		&u.FreePoints,
+		&u.CurrentStreak,
+		&u.LongestStreak,
+		&u.LastActiveAt,
 		&u.CreatedAt,
 		&u.LastResetAt,
 		&u.RefreshToken,
@@ -220,7 +232,7 @@ func (r *Repository) GetByResetToken(ctx context.Context, token string) (*User, 
 	query := `
 		SELECT id, username, full_name, email, password_hash, email_verified,
 		COALESCE(verification_token, ''), COALESCE(verification_expires_at, '0001-01-01'),
-		paid_points, free_points,
+		paid_points, free_points, COALESCE(current_streak,0), COALESCE(longest_streak,0), COALESCE(last_active_at, '0001-01-01'),
 		created_at, last_reset_at,
 		COALESCE(password_reset_token, ''), COALESCE(password_reset_expires_at, '0001-01-01')
 		FROM users
@@ -241,6 +253,9 @@ func (r *Repository) GetByResetToken(ctx context.Context, token string) (*User, 
 		&u.VerificationExpiresAt,
 		&u.PaidPoints,
 		&u.FreePoints,
+		&u.CurrentStreak,
+		&u.LongestStreak,
+		&u.LastActiveAt,
 		&u.CreatedAt,
 		&u.LastResetAt,
 		&u.PasswordResetToken,
@@ -279,6 +294,46 @@ func (r *Repository) SetRefreshToken(ctx context.Context, id uuid.UUID, token st
 	return err
 }
 
+// UpdateStreak increments or resets a user's streak based on provided date
+func (r *Repository) UpdateStreak(ctx context.Context, id uuid.UUID, now time.Time) (int, int, error) {
+	// Load current streak fields
+	query := `SELECT COALESCE(current_streak,0), COALESCE(longest_streak,0), COALESCE(last_active_at,'0001-01-01') FROM users WHERE id = $1`
+	row := db.Pool.QueryRow(ctx, query, id)
+	var current, longest int
+	var lastActive time.Time
+	if err := row.Scan(&current, &longest, &lastActive); err != nil {
+		return 0, 0, err
+	}
+
+	// Determine if now is the same day, previous day, or later
+	y := now.UTC()
+	today := time.Date(y.Year(), y.Month(), y.Day(), 0, 0, 0, 0, time.UTC)
+	yesterday := today.AddDate(0, 0, -1)
+	lastDate := time.Date(lastActive.UTC().Year(), lastActive.UTC().Month(), lastActive.UTC().Day(), 0, 0, 0, 0, time.UTC)
+
+	nextStreak := 1
+	if !lastActive.IsZero() {
+		if lastDate.Equal(today) {
+			// already counted today
+			return current, longest, nil
+		}
+		if lastDate.Equal(yesterday) {
+			nextStreak = current + 1
+		}
+	}
+
+	if nextStreak > longest {
+		longest = nextStreak
+	}
+
+	update := `UPDATE users SET current_streak = $1, longest_streak = $2, last_active_at = $3 WHERE id = $4`
+	if _, err := db.Pool.Exec(ctx, update, nextStreak, longest, now.UTC(), id); err != nil {
+		return 0, 0, err
+	}
+
+	return nextStreak, longest, nil
+}
+
 func (r *Repository) ClearRefreshToken(ctx context.Context, id uuid.UUID) error {
 	query := `
 		UPDATE users
@@ -294,7 +349,7 @@ func (r *Repository) GetByRefreshToken(ctx context.Context, token string) (*User
 	query := `
 		SELECT id, username, full_name, email, password_hash, email_verified,
 		COALESCE(verification_token, ''), COALESCE(verification_expires_at, '0001-01-01'),
-		paid_points, free_points,
+		paid_points, free_points, COALESCE(current_streak,0), COALESCE(longest_streak,0), COALESCE(last_active_at, '0001-01-01'),
 		created_at, last_reset_at, COALESCE(refresh_token, '')
 		FROM users
 		WHERE refresh_token = $1
@@ -314,6 +369,9 @@ func (r *Repository) GetByRefreshToken(ctx context.Context, token string) (*User
 		&u.VerificationExpiresAt,
 		&u.PaidPoints,
 		&u.FreePoints,
+		&u.CurrentStreak,
+		&u.LongestStreak,
+		&u.LastActiveAt,
 		&u.CreatedAt,
 		&u.LastResetAt,
 		&u.RefreshToken,

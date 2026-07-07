@@ -17,6 +17,9 @@ type User struct {
 	VerificationExpiresAt  time.Time
 	FreePoints             int
 	PaidPoints             int
+	CurrentStreak          int
+	LongestStreak          int
+	LastActiveAt           time.Time
 	CreatedAt              time.Time
 	LastResetAt            time.Time
 	PasswordResetToken     string
