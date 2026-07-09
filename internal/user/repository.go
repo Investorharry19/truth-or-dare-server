@@ -25,7 +25,7 @@ func (r *Repository) Create(ctx context.Context, u *User) error {
 			verification_token, verification_expires_at, paid_points, free_points, current_streak, longest_streak, last_active_at,
 			last_reset_at, password_reset_token, password_reset_expires_at, refresh_token
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 	`
 
 	_, err := db.Pool.Exec(ctx, query,

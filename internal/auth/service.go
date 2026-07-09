@@ -16,6 +16,7 @@ import (
 	"github.com/Investorharry19/truth-or-dare-server/internal/user"
 	jwtpkg "github.com/Investorharry19/truth-or-dare-server/pkg/jwt"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -187,6 +188,14 @@ func (s *Service) sendPasswordResetEmail(ctx context.Context, email, username, t
 	return nil
 }
 
+func classifyRegistrationError(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		return ErrEmailOrUsernameTaken
+	}
+	return err
+}
+
 func (s *Service) Register(
 	ctx context.Context,
 	username, email, fullName, password string,
@@ -219,7 +228,7 @@ func (s *Service) Register(
 	err = s.users.Create(ctx, u)
 	if err != nil {
 		fmt.Println(err)
-		return uuid.Nil, ErrEmailOrUsernameTaken
+		return uuid.Nil, classifyRegistrationError(err)
 	}
 
 	if err := s.sendVerificationEmail(ctx, u.Email, u.Username, token); err != nil {
