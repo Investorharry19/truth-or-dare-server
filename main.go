@@ -26,8 +26,10 @@ import (
 func main() {
 	_ = godotenv.Load()
 
+	log.Println("[startup] 1/6 connecting to database...")
 	db.Connect()
 	defer db.Pool.Close()
+	log.Println("[startup] 2/6 database connected")
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -52,6 +54,14 @@ func main() {
 	})
 	r.GET("/docs", func(c *gin.Context) {
 		c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(swaggerUIHTML))
+	})
+
+	r.GET("/health", func(c *gin.Context) {
+		if !db.Healthy() {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "unhealthy", "db": "unreachable"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "okay", "db": "connected"})
 	})
 
 	// Catch all OPTIONS preflight requests
@@ -80,15 +90,14 @@ func main() {
 		authRoutes.GET("/streak", middleware.AuthMiddleware(), authHandler.StreakGetHandler)
 		authRoutes.POST("/streak", middleware.AuthMiddleware(), authHandler.StreakRecordHandler)
 	}
+
 	roomRoutes := r.Group("/room")
 	{
-
 		// Keep auth for regular HTTP routes
 		roomRoutes.POST("/create", middleware.AuthMiddleware(), room.CreateRoomHandler)
 		roomRoutes.POST("/lobbies/:id/claim", middleware.AuthMiddleware(), room.ClaimLobbyHandler)
 		roomRoutes.GET("/:id", middleware.AuthMiddleware(), room.GetRoomHandler)
 		roomRoutes.POST("/:id/upload", middleware.AuthMiddleware(), room.UploadFileHandler)
-
 	}
 
 	payment := r.Group("/payment")
@@ -115,37 +124,47 @@ func main() {
 		})
 	})
 
-	//Print all registered routes BEFORE starting server
+	r.GET("/ws", room.ServeWs)
+
+	// Initialize LiveKit helper routes (token issuance)
+	room.InitializeLiveKitRoutes(r)
+
+	// Print all registered routes (after every route has been added)
 	fmt.Println("\n🔍 Registered Routes:")
 	for _, route := range r.Routes() {
 		fmt.Printf("  %s\t%s\n", route.Method, route.Path)
 	}
 	fmt.Println()
 
-	r.GET("/health", func(c *gin.Context) {
-		c.JSON(200, gin.H{
-			"status": "okay",
-			"db":     "connected",
-		})
-	})
-	r.GET("/ws", room.ServeWs)
+	log.Println("[startup] 3/6 routes registered")
 
-	// Initialize LiveKit helper routes (token issuance)
-	room.InitializeLiveKitRoutes(r)
-
-	cronjobs.StartPointsResetCron(db.Pool)
-	room.InitializeLobbyPool()
-	room.StartInactivityCleanup(room.InactivityTimeout)
-	log.Println("Server running on port", port)
 	srv := &http.Server{
 		Addr:    ":" + port,
 		Handler: r,
 	}
 
+	// Start listening FIRST so Render detects the open port immediately.
 	go func() {
+		log.Println("[startup] 4/6 listening on port", port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("listen: %s\n", err)
 		}
+	}()
+
+	// Slower setup runs in the background so it can never block the server
+	// from starting. The last [startup] line that prints shows where it stops.
+	go func() {
+		log.Println("[startup] 5/6 starting points reset cron...")
+		cronjobs.StartPointsResetCron(db.Pool)
+		log.Println("[startup] cron started")
+
+		log.Println("[startup] initializing lobby pool...")
+		room.InitializeLobbyPool()
+		log.Println("[startup] lobby pool ready")
+
+		log.Println("[startup] starting inactivity cleanup...")
+		room.StartInactivityCleanup(room.InactivityTimeout)
+		log.Println("[startup] 6/6 background setup complete")
 	}()
 
 	quit := make(chan os.Signal, 1)
