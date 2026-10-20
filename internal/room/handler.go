@@ -757,24 +757,25 @@ func cleanupClient(client *Client, conn *websocket.Conn) {
 		time.Sleep(10 * time.Second)
 
 		clientsMu.Lock()
-		defer clientsMu.Unlock()
 
 		currentClient, exists := clients[client.UserID]
 
 		// user reconnected
 		if exists && !currentClient.Disconnected {
+			clientsMu.Unlock()
 			return
 		}
 
-		// fully remove now
 		if exists {
+			delete(clients, client.UserID)
+		}
 
+		clientsMu.Unlock()
+
+		if exists {
 			if currentClient.RoomID != "" {
 				leaveRoom(currentClient)
 			}
-
-			delete(clients, client.UserID)
-
 			fmt.Printf("Fully disconnected: %s\n", client.Username)
 		}
 	}()
@@ -971,36 +972,38 @@ func CreateRoomHandler(c *gin.Context) {
 		return
 	}
 
-	roomsMu.Lock()
 	hostID := c.GetString("user_id")
 
-	roomID := uuid.New().String()[:6]
+	var response gin.H
+	func() {
+		roomsMu.Lock()
+		defer roomsMu.Unlock()
 
-	room := CreateRoom(
-		roomID,
-		body.Name,
-		hostID,
-		body.Username,
-		body.MaxPlayers,
-		body.Private,
-		body.Password,
-	)
+		roomID := uuid.New().String()[:6]
+		room := CreateRoom(
+			roomID,
+			body.Name,
+			hostID,
+			body.Username,
+			body.MaxPlayers,
+			body.Private,
+			body.Password,
+		)
+		room.BannedWords = body.BannedWords
 
-	room.BannedWords = body.BannedWords
-
-	response := gin.H{
-		"roomId":       room.ID,
-		"name":         room.Name,
-		"hostId":       room.HostID,
-		"maxPlayers":   room.MaxPlayers,
-		"private":      room.Private,
-		"bannedWords":  room.BannedWords,
-		"participants": room.Participants,
-	}
-	roomsMu.Unlock()
+		response = gin.H{
+			"roomId":       room.ID,
+			"name":         room.Name,
+			"hostId":       room.HostID,
+			"maxPlayers":   room.MaxPlayers,
+			"private":      room.Private,
+			"bannedWords":  room.BannedWords,
+			"participants": room.Participants,
+		}
+	}()
 
 	c.JSON(http.StatusOK, response)
-	RefreshLobbyPool()
+	go RefreshLobbyPool()
 }
 
 func ClaimLobbyHandler(c *gin.Context) {

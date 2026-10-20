@@ -189,6 +189,8 @@ The websocket connection uses query parameters for authentication:
 - `token` - JWT access token
 - `username` - user display name
 
+WebSocket writes have a 10-second deadline. Room creation returns without waiting for the lobby update broadcast, so an unresponsive WebSocket client cannot delay the create-room HTTP response.
+
 The room subsystem supports:
 
 - joining and leaving rooms

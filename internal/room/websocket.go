@@ -3,11 +3,14 @@ package room
 import (
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/Investorharry19/truth-or-dare-server/pkg/jwt"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
+
+const websocketWriteTimeout = 10 * time.Second
 
 // Upgrader allows HTTP connections to become WebSockets
 var upgrader = websocket.Upgrader{
@@ -128,6 +131,10 @@ func (client *Client) writeJSON(message interface{}) error {
 	defer client.writeMu.Unlock()
 	if client.Conn == nil {
 		return fmt.Errorf("client connection is nil")
+	}
+
+	if err := client.Conn.SetWriteDeadline(time.Now().Add(websocketWriteTimeout)); err != nil {
+		return fmt.Errorf("set websocket write deadline: %w", err)
 	}
 
 	return client.Conn.WriteJSON(message)
