@@ -1,0 +1,686 @@
+openapi: 3.0.3
+info:
+  title: Truth or Dare API
+  version: 1.0.0
+  description: HTTP and WebSocket API for the Truth or Dare game server.
+servers:
+  - url: /
+    description: Current server
+tags:
+  - name: Auth
+  - name: Rooms
+  - name: Payments
+  - name: Points
+  - name: LiveKit
+  - name: System
+paths:
+  /:
+    get:
+      tags: [System]
+      summary: Get the server welcome message
+      responses:
+        '200':
+          description: Welcome message and last update.
+  /health:
+    get:
+      tags: [System]
+      summary: Check server health
+      responses:
+        '200':
+          description: Server and database status.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: okay
+                  db:
+                    type: string
+                    example: connected
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Register an account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, email, password, fullName]
+              properties:
+                username:
+                  type: string
+                  minLength: 3
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  minLength: 6
+                fullName:
+                  type: string
+      responses:
+        '201':
+          description: Account created and verification email sent.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          description: Email or username is already taken.
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Log in with email and password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+      responses:
+        '200':
+          description: Access and refresh tokens.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenPair'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /auth/google:
+    post:
+      tags: [Auth]
+      summary: Log in with a Google ID token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [idToken]
+              properties:
+                idToken:
+                  type: string
+      responses:
+        '200':
+          description: Access and refresh tokens.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenPair'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Refresh the access token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken:
+                  type: string
+      responses:
+        '200':
+          description: New access and refresh tokens.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenPair'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /auth/forgot-password:
+    post:
+      tags: [Auth]
+      summary: Request a password reset email
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+                  format: email
+      responses:
+        '200':
+          description: A generic response to avoid revealing whether the email exists.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+  /auth/reset-password:
+    post:
+      tags: [Auth]
+      summary: Set a new password using a reset token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, password]
+              properties:
+                token:
+                  type: string
+                password:
+                  type: string
+                  minLength: 8
+      responses:
+        '200':
+          description: Password reset successfully.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+  /auth/verify-email:
+    get:
+      tags: [Auth]
+      summary: Verify an email address using a query token
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Email verified, or already verified.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+    post:
+      tags: [Auth]
+      summary: Verify an email address using a JSON token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token:
+                  type: string
+      responses:
+        '200':
+          description: Email verified, or already verified.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+  /auth/resend-email-verification-token:
+    post:
+      tags: [Auth]
+      summary: Resend the email verification link
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+                  format: email
+      responses:
+        '200':
+          description: Verification email resent.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Log out the current user
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Logged out.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: Get the current user profile
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: User profile.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /auth/points:
+    get:
+      tags: [Auth]
+      summary: Get the current user's point balances
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Point balances.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PointBalance'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /auth/streak:
+    get:
+      tags: [Auth]
+      summary: Get the current user's streak
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Current and longest streak.
+    post:
+      tags: [Auth]
+      summary: Record activity for the current user's streak
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Updated streak values.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /room/create:
+    post:
+      tags: [Rooms]
+      summary: Create a game room
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                max_players:
+                  type: integer
+                private:
+                  type: boolean
+                password:
+                  type: string
+                banned_words:
+                  type: array
+                  items:
+                    type: string
+                username:
+                  type: string
+      responses:
+        '200':
+          description: Room created.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /room/lobbies/{id}/claim:
+    post:
+      tags: [Rooms]
+      summary: Claim an ownerless generated lobby
+      description: The first claimant becomes host and first participant. An active authenticated /ws connection is required. Lobby name and maximum player count can be customized when claiming.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username]
+              properties:
+                username:
+                  type: string
+                name:
+                  type: string
+                  maxLength: 40
+                max_players:
+                  type: integer
+                  minimum: 2
+                  maximum: 20
+      responses:
+        '200':
+          description: Lobby claimed by the authenticated user.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Lobby not found.
+        '409':
+          description: Lobby was already claimed or is not claimable.
+  /room/{id}:
+    get:
+      tags: [Rooms]
+      summary: Get room details
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Room details and current game state.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Room not found.
+  /room/{id}/upload:
+    post:
+      tags: [Rooms]
+      summary: Upload a file to a room
+      description: Requires the authenticated user to be a participant. Maximum upload size is 10 MB.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          description: Uploaded file details.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: User is not a room participant.
+        '404':
+          description: Room not found.
+  /payment/initialize:
+    post:
+      tags: [Payments]
+      summary: Initialize a points purchase
+      description: Minimum purchase is 120 points.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [points]
+              properties:
+                points:
+                  type: integer
+                  minimum: 120
+      responses:
+        '200':
+          description: Paystack authorization details.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /payment/verify/{reference}:
+    get:
+      tags: [Payments]
+      summary: Verify a payment and credit purchased points
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: reference
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Payment verified and points credited.
+        '400':
+          description: Payment verification failed.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: The payment belongs to another user.
+  /payment/callback:
+    get:
+      tags: [Payments]
+      summary: Paystack payment callback
+      description: Browser redirect target for Paystack; returns an HTML status page.
+      responses:
+        '200':
+          description: Payment callback status page.
+  /payment/webhook:
+    post:
+      tags: [Payments]
+      summary: Receive Paystack payment events
+      description: Paystack calls this endpoint; requests are validated with the Paystack signature.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                event:
+                  type: string
+                data:
+                  type: object
+                  additionalProperties: true
+      responses:
+        '200':
+          description: Webhook received.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /points/transfer:
+    post:
+      tags: [Points]
+      summary: Transfer points to another user
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [receiver_username, points]
+              properties:
+                receiver_username:
+                  type: string
+                points:
+                  type: integer
+                  minimum: 1
+      responses:
+        '200':
+          description: Transfer completed with fees and updated balance.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Receiver not found.
+  /points/transfers:
+    get:
+      tags: [Points]
+      summary: Get the current user's transfer history
+      description: Returns up to the 50 most recent transfer records.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Transfer history.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /livekit/token:
+    post:
+      tags: [LiveKit]
+      summary: Create a LiveKit access token
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [room_id]
+              properties:
+                room_id:
+                  type: string
+      responses:
+        '200':
+          description: LiveKit token and connection details.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    get:
+      tags: [LiveKit]
+      summary: Create a LiveKit access token using query parameters
+      description: Requires both a bearer access token and an application token in the query string.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: token
+          in: query
+          required: true
+          description: Application access token.
+          schema:
+            type: string
+        - name: room_id
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: LiveKit token and connection details.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /ws:
+    get:
+      tags: [System]
+      summary: Connect to the game WebSocket
+      description: >-
+        Upgrade the connection to WebSocket. Supply the application JWT in the
+        token query parameter and the display name in username. Game messages
+        use JSON with type and payload fields; for example type=join_room with
+        payload.room_id. Send type=subscribe_lobbies to receive a lobbies_snapshot
+        event. The server broadcasts lobbies_updated events to connected users
+        when the open lobby list changes. This endpoint is not directly callable
+        as an ordinary HTTP request from Swagger UI.
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: username
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '101':
+          description: WebSocket connection established.
+        '401':
+          description: Invalid access token.
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    TokenPair:
+      type: object
+      properties:
+        accessToken:
+          type: string
+        refreshToken:
+          type: string
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        username:
+          type: string
+        email:
+          type: string
+          format: email
+        email_verified:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        paid_points:
+          type: integer
+        free_points:
+          type: integer
+    PointBalance:
+      type: object
+      properties:
+        free_points:
+          type: integer
+        paid_points:
+          type: integer
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+  responses:
+    BadRequest:
+      description: Invalid request or parameters.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: Missing or invalid authentication.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
