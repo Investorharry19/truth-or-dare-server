@@ -62,11 +62,12 @@ func ServeWs(c *gin.Context) {
 
 	if existingClient, exists := clients[userID]; exists {
 
+		existingClient.writeMu.Lock()
 		oldConn := existingClient.Conn
-
 		existingClient.Conn = conn
 		existingClient.Username = username
 		existingClient.Disconnected = false
+		existingClient.writeMu.Unlock()
 
 		clientsMu.Unlock()
 
@@ -116,4 +117,18 @@ func ServeWs(c *gin.Context) {
 	fmt.Printf("User connected: %s\n", username)
 
 	go handleMessages(client, conn)
+}
+
+func (client *Client) writeJSON(message interface{}) error {
+	if client == nil {
+		return fmt.Errorf("client is nil")
+	}
+
+	client.writeMu.Lock()
+	defer client.writeMu.Unlock()
+	if client.Conn == nil {
+		return fmt.Errorf("client connection is nil")
+	}
+
+	return client.Conn.WriteJSON(message)
 }

@@ -101,6 +101,10 @@ go build -o truth-or-dare-server .
 
 The server listens on the configured `PORT` and defaults to `8080`.
 
+## API Documentation
+
+When the server is running, open `http://localhost:8080/docs` for the interactive Swagger UI. The OpenAPI 3.0 specification is available at `http://localhost:8080/openapi.yaml`. Swagger UI loads its assets from a CDN, so an internet connection is needed to render the interactive page.
+
 ## API Endpoints
 
 ### Auth
@@ -137,6 +141,10 @@ The server listens on the configured `PORT` and defaults to `8080`.
 
 - `POST /room/create`
   - Requires auth header
+- `POST /room/lobbies/:id/claim`
+  - Requires auth header
+  - Requires an active `/ws` connection; claims an ownerless generated lobby and joins the claimant as its first participant
+  - JSON body requires `username`; optional `name` (up to 40 characters) and `max_players` (2-20) customize the lobby
 - `GET /room/:id`
   - Requires auth header
 - `POST /room/:id/upload`
@@ -174,6 +182,8 @@ The websocket endpoint is:
 
 - `GET /ws`
 
+Send a message with `type: "subscribe_lobbies"` to receive a `lobbies_snapshot` event. The server broadcasts `lobbies_updated` events with the current open-lobby list whenever lobbies are created, claimed, joined, filled, started, or removed. The server maintains a pool of five public, claimable lobbies and replenishes it when fewer than five public open lobbies are available.
+
 The websocket connection uses query parameters for authentication:
 
 - `token` - JWT access token
@@ -190,7 +200,7 @@ The room subsystem supports:
 ## Scheduled Jobs
 
 - `cronjobs.StartPointsResetCron` runs every 24 hours and resets free points for users if more than 24 hours have passed since the last reset.
-- `room.StartInactivityCleanup` runs every 30 seconds and closes rooms that are inactive for a configured timeout.
+- `room.StartInactivityCleanup` checks every second and applies a 5-minute inactivity timeout to claimed rooms: rooms with at least two players start automatically, while rooms with fewer than two players close. Unclaimed generated lobbies remain open.
 
 ## Project Structure
 

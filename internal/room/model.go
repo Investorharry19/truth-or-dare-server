@@ -21,9 +21,11 @@ type Room struct {
 	Name         string
 	LastActivity time.Time
 	HostID       string    `json:"hostId"`
+	HostUsername string    `json:"hostUsername"`
 	Participants []*Client `json:"participants"`
 	MaxPlayers   int       `json:"maxPlayers"`
 	Private      bool
+	Generated    bool     `json:"generated"`
 	BannedWords  []string `json:"bannedWords"`
 	TimeLimit    int      `json:"timeLimit"`
 	Password     string   `json:"password"`

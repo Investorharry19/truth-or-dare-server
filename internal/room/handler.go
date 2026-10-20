@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,6 +27,7 @@ type Client struct {
 	MicOn    bool            `json:"micOn"`
 
 	Disconnected bool `json:"disconnected"`
+	writeMu      sync.Mutex
 }
 
 type WSMessage struct {
@@ -116,13 +118,19 @@ func handleMessages(client *Client, conn *websocket.Conn) {
 		if r := currentRoom(client); r != nil {
 			r.mu.Lock()
 			r.LastActivity = time.Now()
+			gameStarted := r.GameStarted
 			r.mu.Unlock()
+			if !gameStarted {
+				sendRoomActivity(r)
+			}
 		}
 
 		payload := wsMsg.Payload
 
 		fmt.Println("message type: ", wsMsg.Type)
 		switch wsMsg.Type {
+		case "subscribe_lobbies":
+			sendLobbySnapshot(client)
 
 		// =====================================================
 		// JOIN ROOM
@@ -182,9 +190,10 @@ func handleMessages(client *Client, conn *websocket.Conn) {
 			}
 
 			if alreadyIn {
+				client.RoomID = roomID
 				room.mu.Unlock()
 
-				client.Conn.WriteJSON(gin.H{
+				client.writeJSON(gin.H{
 					"type": "joined_room",
 					"payload": gin.H{
 						"room_id": roomID,
@@ -192,17 +201,19 @@ func handleMessages(client *Client, conn *websocket.Conn) {
 				})
 
 				sendRoomUpdate(room)
+				RefreshLobbyPool()
 				continue
 			}
 
 			room.Participants = append(room.Participants, client)
 			client.RoomID = roomID
+			room.LastActivity = time.Now()
 
 			room.mu.Unlock()
 
 			fmt.Printf("%s joined room %s\n", client.Username, roomID)
 
-			client.Conn.WriteJSON(gin.H{
+			client.writeJSON(gin.H{
 				"type": "joined_room",
 				"payload": gin.H{
 					"room_id": roomID,
@@ -216,6 +227,7 @@ func handleMessages(client *Client, conn *websocket.Conn) {
 			fmt.Println("join_room complete, client.RoomID:", client.RoomID)
 
 			sendRoomUpdate(room)
+			RefreshLobbyPool()
 
 		// =====================================================
 		// LEAVE ROOM
@@ -248,7 +260,7 @@ func handleMessages(client *Client, conn *websocket.Conn) {
 
 			fmt.Println("generate_passcode success. Sending passcode:", passcode)
 			// Return the room's persistent password
-			client.Conn.WriteJSON(gin.H{
+			client.writeJSON(gin.H{
 				"type":    "passcode_generated",
 				"payload": gin.H{"passcode": passcode},
 			})
@@ -292,6 +304,7 @@ func handleMessages(client *Client, conn *websocket.Conn) {
 			roomsMu.Lock()
 			delete(Rooms, room.ID)
 			roomsMu.Unlock()
+			RefreshLobbyPool()
 
 		// =====================================================
 		// START GAME
@@ -335,6 +348,7 @@ func handleMessages(client *Client, conn *websocket.Conn) {
 				"current_player_id": room.HostID,
 			})
 			sendRoomUpdate(room)
+			RefreshLobbyPool()
 
 		// =====================================================
 		// SPIN BOTTLE
@@ -448,6 +462,10 @@ func handleMessages(client *Client, conn *websocket.Conn) {
 			}
 			text, _ := payload["prompt_text"].(string)
 			choice, _ := payload["choice"].(string)
+			if containsBannedWord(room, text) {
+				sendError(client, "Message contains a banned word")
+				continue
+			}
 			targetID := room.CurrentPlayerID
 
 			room.mu.Lock()
@@ -502,6 +520,10 @@ func handleMessages(client *Client, conn *websocket.Conn) {
 			reply, _ := payload["response_text"].(string)
 			if reply == "" {
 				reply, _ = payload["text"].(string)
+			}
+			if containsBannedWord(room, reply) {
+				sendError(client, "Message contains a banned word")
+				continue
 			}
 
 			room.mu.Lock()
@@ -779,8 +801,9 @@ func leaveRoom(client *Client) {
 		// Clean up Cloudinary resources
 		cleanupRoomResources(room)
 		roomsMu.Lock()
-		defer roomsMu.Unlock()
 		delete(Rooms, roomID)
+		roomsMu.Unlock()
+		RefreshLobbyPool()
 		return
 	}
 
@@ -804,6 +827,7 @@ func leaveRoom(client *Client) {
 	})
 
 	sendRoomUpdate(room)
+	RefreshLobbyPool()
 }
 
 func currentRoom(client *Client) *Room {
@@ -829,12 +853,12 @@ func getUsername(room *Room, userID string) string {
 }
 
 func sendError(client *Client, msg string) {
-	if client == nil || client.Conn == nil {
-		fmt.Printf("sendError skipped for nil client or connection: %s\n", msg)
+	if client == nil {
+		fmt.Printf("sendError skipped for nil client: %s\n", msg)
 		return
 	}
 
-	if err := client.Conn.WriteJSON(gin.H{
+	if err := client.writeJSON(gin.H{
 		"type": "error",
 		"payload": gin.H{
 			"message": msg,
@@ -852,6 +876,25 @@ func addRoundHistory(room *Room, entry RoundHistoryItem) {
 	if len(room.RoundHistory) > 100 {
 		room.RoundHistory = room.RoundHistory[len(room.RoundHistory)-100:]
 	}
+}
+
+func containsBannedWord(room *Room, text string) bool {
+	if room == nil || text == "" {
+		return false
+	}
+
+	text = strings.ToLower(text)
+	room.mu.RLock()
+	defer room.mu.RUnlock()
+
+	for _, bannedWord := range room.BannedWords {
+		bannedWord = strings.TrimSpace(strings.ToLower(bannedWord))
+		if bannedWord != "" && strings.Contains(text, bannedWord) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func sendRoomUpdate(room *Room) {
@@ -872,27 +915,44 @@ func sendRoomUpdate(room *Room) {
 		})
 	}
 
+	var inactivityExpiresAt interface{}
+	if !room.GameStarted {
+		inactivityExpiresAt = room.LastActivity.Add(InactivityTimeout).UnixMilli()
+	}
+
 	payload := gin.H{
-		"players":           players,
-		"game_started":      room.GameStarted,
-		"current_player_id": room.CurrentPlayerID,
-		"commander_id":      room.CommanderID,
-		"selected_id":       room.LastSelectedID,
-		"phase":             room.RoundPhase,
-		"choice":            room.CurrentChoice,
-		"current_challenge": room.CurrentChallenge,
-		"target_response":   room.LastTargetResponse,
-		"is_paused":         room.IsPaused,
-		"round_history":     room.RoundHistory,
+		"players":               players,
+		"game_started":          room.GameStarted,
+		"inactivity_expires_at": inactivityExpiresAt,
+		"current_player_id":     room.CurrentPlayerID,
+		"commander_id":          room.CommanderID,
+		"selected_id":           room.LastSelectedID,
+		"phase":                 room.RoundPhase,
+		"choice":                room.CurrentChoice,
+		"current_challenge":     room.CurrentChallenge,
+		"target_response":       room.LastTargetResponse,
+		"is_paused":             room.IsPaused,
+		"round_history":         room.RoundHistory,
 	}
 
 	Broadcast(room, "room_update", payload)
 }
 
-func CreateRoomHandler(c *gin.Context) {
-	roomsMu.Lock()
-	defer roomsMu.Unlock()
+func sendRoomActivity(room *Room) {
+	room.mu.RLock()
+	if room.GameStarted {
+		room.mu.RUnlock()
+		return
+	}
+	expiresAt := room.LastActivity.Add(InactivityTimeout).UnixMilli()
+	room.mu.RUnlock()
 
+	Broadcast(room, "room_activity", gin.H{
+		"inactivity_expires_at": expiresAt,
+	})
+}
+
+func CreateRoomHandler(c *gin.Context) {
 	type requestBody struct {
 		Name        string   `json:"name"`
 		MaxPlayers  int      `json:"max_players"`
@@ -911,6 +971,7 @@ func CreateRoomHandler(c *gin.Context) {
 		return
 	}
 
+	roomsMu.Lock()
 	hostID := c.GetString("user_id")
 
 	roomID := uuid.New().String()[:6]
@@ -927,7 +988,7 @@ func CreateRoomHandler(c *gin.Context) {
 
 	room.BannedWords = body.BannedWords
 
-	c.JSON(http.StatusOK, gin.H{
+	response := gin.H{
 		"roomId":       room.ID,
 		"name":         room.Name,
 		"hostId":       room.HostID,
@@ -935,7 +996,117 @@ func CreateRoomHandler(c *gin.Context) {
 		"private":      room.Private,
 		"bannedWords":  room.BannedWords,
 		"participants": room.Participants,
-	})
+	}
+	roomsMu.Unlock()
+
+	c.JSON(http.StatusOK, response)
+	RefreshLobbyPool()
+}
+
+func ClaimLobbyHandler(c *gin.Context) {
+	var request struct {
+		Name       string `json:"name" binding:"omitempty,max=40"`
+		MaxPlayers int    `json:"max_players" binding:"omitempty,min=2,max=20"`
+		Username   string `json:"username" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	username := strings.TrimSpace(request.Username)
+	name := strings.TrimSpace(request.Name)
+	if username == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "username is required"})
+		return
+	}
+	if request.Name != "" && name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "room name cannot be blank"})
+		return
+	}
+
+	roomID := c.Param("id")
+	userID := c.GetString("user_id")
+
+	clientsMu.RLock()
+	claimant := clients[userID]
+	clientsMu.RUnlock()
+	if claimant == nil {
+		c.JSON(http.StatusConflict, gin.H{"error": "Connect to the game server before claiming a lobby"})
+		return
+	}
+	claimant.writeMu.Lock()
+	isConnected := claimant.Conn != nil
+	claimant.writeMu.Unlock()
+	if !isConnected {
+		c.JSON(http.StatusConflict, gin.H{"error": "Connect to the game server before claiming a lobby"})
+		return
+	}
+
+	roomsMu.Lock()
+	lobby := Rooms[roomID]
+	if lobby == nil {
+		roomsMu.Unlock()
+		c.JSON(http.StatusNotFound, gin.H{"error": "Lobby not found"})
+		return
+	}
+
+	lobby.mu.Lock()
+	if !lobby.Generated || lobby.HostID != "" {
+		lobby.mu.Unlock()
+		roomsMu.Unlock()
+		c.JSON(http.StatusConflict, gin.H{"error": "Lobby has already been claimed"})
+		return
+	}
+
+	lobby.HostID = userID
+	lobby.HostUsername = username
+	if name != "" {
+		lobby.Name = name
+	}
+	if request.MaxPlayers != 0 {
+		lobby.MaxPlayers = request.MaxPlayers
+	}
+	lobby.LastActivity = time.Now()
+	lobby.mu.Unlock()
+	roomsMu.Unlock()
+
+	if claimant.RoomID != "" {
+		leaveRoom(claimant)
+	}
+
+	roomsMu.Lock()
+	lobby = Rooms[roomID]
+	if lobby == nil {
+		roomsMu.Unlock()
+		c.JSON(http.StatusNotFound, gin.H{"error": "Lobby not found"})
+		return
+	}
+	lobby.mu.Lock()
+	claimant.Username = username
+	claimant.RoomID = lobby.ID
+	lobby.Participants = append(lobby.Participants, claimant)
+	lobby.LastActivity = time.Now()
+	participants := []gin.H{{
+		"id":       claimant.UserID,
+		"username": claimant.Username,
+		"isHost":   true,
+		"micOn":    claimant.MicOn,
+	}}
+	response := gin.H{
+		"roomId":       lobby.ID,
+		"name":         lobby.Name,
+		"hostId":       lobby.HostID,
+		"maxPlayers":   lobby.MaxPlayers,
+		"private":      lobby.Private,
+		"participants": participants,
+		"phase":        PhaseWaiting,
+	}
+	lobby.mu.Unlock()
+	roomsMu.Unlock()
+
+	RefreshLobbyPool()
+	c.JSON(http.StatusOK, response)
 }
 
 func GetRoomHandler(c *gin.Context) {
