@@ -1,9 +1,14 @@
 package main
 
 import (
+	"context"
+	_ "embed"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/Investorharry19/truth-or-dare-server/cronjobs"
@@ -35,12 +40,19 @@ func main() {
 	r := gin.Default()
 
 	r.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"http://localhost:3000", "http://127.0.0.1:3000", "https://vivid-chaos-web.vercel.app"},
+		AllowOrigins:     []string{"http://localhost:3000", "http://127.0.0.1:3000", "https://vivid-chaos-web.vercel.app", "https://tod.amehhendrix.online"},
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"},
 		AllowHeaders:     []string{"Content-Type", "Authorization", "X-Requested-With"},
 		AllowCredentials: true,
 		MaxAge:           12 * time.Hour,
 	}))
+
+	r.GET("/openapi.yaml", func(c *gin.Context) {
+		c.Data(http.StatusOK, "application/yaml; charset=utf-8", openAPISpec)
+	})
+	r.GET("/docs", func(c *gin.Context) {
+		c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(swaggerUIHTML))
+	})
 
 	// Catch all OPTIONS preflight requests
 	r.OPTIONS("/*path", func(c *gin.Context) {
@@ -73,6 +85,7 @@ func main() {
 
 		// Keep auth for regular HTTP routes
 		roomRoutes.POST("/create", middleware.AuthMiddleware(), room.CreateRoomHandler)
+		roomRoutes.POST("/lobbies/:id/claim", middleware.AuthMiddleware(), room.ClaimLobbyHandler)
 		roomRoutes.GET("/:id", middleware.AuthMiddleware(), room.GetRoomHandler)
 		roomRoutes.POST("/:id/upload", middleware.AuthMiddleware(), room.UploadFileHandler)
 
@@ -121,9 +134,55 @@ func main() {
 	room.InitializeLiveKitRoutes(r)
 
 	cronjobs.StartPointsResetCron(db.Pool)
-	room.StartInactivityCleanup(5 * time.Minute)
+	room.InitializeLobbyPool()
+	room.StartInactivityCleanup(room.InactivityTimeout)
 	log.Println("Server running on port", port)
-	r.Run(":" + port)
-	select {}
+	srv := &http.Server{
+		Addr:    ":" + port,
+		Handler: r,
+	}
 
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("listen: %s\n", err)
+		}
+	}()
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+	log.Println("Shutting down server...")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Fatal("Server forced to shutdown:", err)
+	}
+
+	log.Println("Server exiting")
 }
+
+//go:embed openapi.yaml
+var openAPISpec []byte
+
+const swaggerUIHTML = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Truth or Dare API docs</title>
+    <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui.css">
+    <style>body { margin: 0; }</style>
+  </head>
+  <body>
+    <div id="swagger-ui"></div>
+    <script src="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui-bundle.js"></script>
+    <script>
+      window.onload = () => SwaggerUIBundle({
+        url: "/openapi.yaml",
+        dom_id: "#swagger-ui",
+        deepLinking: true
+      });
+    </script>
+  </body>
+</html>`
